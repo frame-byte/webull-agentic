@@ -1,0 +1,37 @@
+#cloud-config
+# Boots an Ubuntu 24.04 droplet into a running gateway (MODE=dryrun, no Webull keys).
+# Contains NO secrets: droplet user-data is readable via the DO API and metadata service.
+# The webhook secret is generated on the droplet; Webull keys are added by you over SSH.
+package_update: true
+package_upgrade: true
+packages: [docker.io, docker-compose-v2, git, ufw, fail2ban, unattended-upgrades, openssl]
+
+users:
+  - default          # 'ubuntu' — receives your DigitalOcean SSH key
+
+ssh_pwauth: false
+disable_root: true
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/90-hardening.conf
+    content: |
+      PasswordAuthentication no
+      PermitRootLogin no
+      KbdInteractiveAuthentication no
+
+runcmd:
+  - systemctl restart ssh
+  - usermod -aG docker ubuntu
+  # Host firewall (defense in depth; the DigitalOcean cloud firewall is the primary one)
+  - ufw default deny incoming && ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable
+  - systemctl enable --now docker fail2ban unattended-upgrades
+  # App
+  - git clone --branch __BRANCH__ https://github.com/__REPO__.git /opt/gateway
+  - cp /opt/gateway/.env.example /opt/gateway/.env
+  - cp /opt/gateway/config/strategies.example.yaml /opt/gateway/config/strategies.yaml
+  - sed -i "s|^WEBHOOK_SECRET=.*|WEBHOOK_SECRET=$(openssl rand -hex 24)|" /opt/gateway/.env
+  - sed -i "s|^TRUST_PROXY_HEADERS=.*|TRUST_PROXY_HEADERS=true|" /opt/gateway/.env
+  - echo "DOMAIN=__DOMAIN__" >> /opt/gateway/.env
+  - mkdir -p /opt/gateway/data
+  - chown -R ubuntu:ubuntu /opt/gateway && chmod 600 /opt/gateway/.env
+  - cd /opt/gateway && docker compose up -d --build

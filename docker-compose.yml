@@ -6,6 +6,7 @@ services:
     volumes:
       - ./data:/data
       - ./config/strategies.yaml:/srv/config/strategies.yaml:ro
+    ports: ["127.0.0.1:8000:8000"]   # local admin access over SSH only
     restart: unless-stopped
   caddy:
     image: caddy:2.8.4

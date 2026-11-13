@@ -50,20 +50,43 @@ python -m scripts.check_webull AAPL
 4. The SDK may ask for 2FA on first use. Approve it in the Webull app. The token is saved
    under `WEBULL_OPENAPI_TOKEN_DIR`, so keep that on persistent storage.
 
-## Step 4: Deploy behind HTTPS
+## Step 4: Deploy (DigitalOcean + Cloudflare)
 
-TradingView only posts to ports 80 and 443, so the gateway needs a public HTTPS URL. The
-simplest setup is a small VPS (about $5/month) with a DNS name pointing at it:
+`deploy/provision.py` creates, through the APIs:
+- an Ubuntu 24.04 droplet (`s-1vcpu-1gb`, nyc3) booted by [`deploy/cloud-init.yaml`](deploy/cloud-init.yaml)
+  (Docker, ufw, fail2ban, unattended upgrades, the repo, the gateway in **dryrun**)
+- a cloud firewall: SSH 22, HTTP 80 (needed for the certificate), and **443 only from TradingView's IPs**
+- a **DNS-only** (grey cloud) Cloudflare A record `trade.mdtrade.app`
 
 ```bash
-# on the server, in this repo, with .env and config/strategies.yaml in place
-echo "TRUST_PROXY_HEADERS=true" >> .env     # Caddy sits in front and sets X-Forwarded-For
-DOMAIN=trade.example.com docker compose up -d --build
-curl https://trade.example.com/health
+DO_TOKEN=... CF_TOKEN=... python3 deploy/provision.py --ssh-key-name <your-key>           # plan only
+DO_TOKEN=... CF_TOKEN=... python3 deploy/provision.py --ssh-key-name <your-key> --apply
 ```
 
-Caddy gets the TLS certificate automatically. The gateway only accepts webhooks from
-TradingView's published IPs. Keep `--workers 1`, because the per-symbol lock is in-process.
+Because 443 only accepts TradingView, reach the admin endpoints over SSH:
+
+```bash
+ssh ubuntu@trade.mdtrade.app 'curl -s localhost:8000/health'
+```
+
+### Where secrets live
+
+| Secret | Where it goes | Never |
+|---|---|---|
+| Webull app key, secret, account ID | `/opt/gateway/.env` on the droplet (mode 600, owner `ubuntu`), added over SSH | the repo, cloud-init/user-data, chat, GitHub |
+| Webhook secret | Generated on the droplet at boot into the same `.env`; copy it into the TradingView alert message | the repo |
+| Webull 2FA token | `/opt/gateway/data/webull-token` (SDK writes it) | the repo |
+| DigitalOcean and Cloudflare API tokens | Claude environment network secrets (injected by the proxy), or a password manager | the droplet, the repo |
+| GitHub | Not needed: the repo is public and the droplet clones read-only over HTTPS. If you make it private, add a read-only **deploy key** generated on the droplet. If you add a GitHub Actions deploy later, use repo **Actions secrets**. | a personal access token on the droplet |
+
+Add the Webull keys:
+
+```bash
+ssh ubuntu@trade.mdtrade.app
+nano /opt/gateway/.env        # fill WEBULL_APP_KEY / WEBULL_APP_SECRET / WEBULL_ACCOUNT_ID
+cd /opt/gateway && docker compose up -d
+docker compose exec gateway python -m scripts.check_webull AAPL
+```
 
 ## Step 5: Create the TradingView alerts
 
@@ -75,7 +98,7 @@ TradingView API connector.
    - **Condition:** your strategy, "Order fills only".
    - **Message:** paste [`tradingview/alert_message.json`](tradingview/alert_message.json).
      Put in your secret and set `strategy_id` to match `strategies.yaml`.
-   - **Notifications:** Webhook URL `https://trade.example.com/webhook`.
+   - **Notifications:** Webhook URL `https://trade.mdtrade.app/webhook`.
 3. For indicator alerts (not strategies), use
    [`tradingview/indicator_alert_message.json`](tradingview/indicator_alert_message.json),
    with one alert for `"action": "buy"` and one for `"action": "sell"`. Set them to
@@ -92,12 +115,13 @@ quotes**, but fills are simulated. Check the journal daily against TradingView's
 strategy tester:
 
 ```bash
-curl -H "x-admin-token: $WEBHOOK_SECRET" https://trade.example.com/admin/journal
+ssh ubuntu@trade.mdtrade.app 'cd /opt/gateway && . ./.env && curl -s -H "x-admin-token: $WEBHOOK_SECRET" localhost:8000/admin/journal'
 ```
 
 ## Step 7: Go live, small
 
 1. Set `MODE=live` in `.env`, keep `shares: 1`, then run `docker compose up -d`.
+1b. `cd /opt/gateway && sed -i s/^MODE=.*/MODE=live/ .env && docker compose up -d`
 2. Watch the first live fills in the Webull app.
 3. Raise sizing in `strategies.yaml` once fills match expectations.
 
@@ -105,10 +129,10 @@ curl -H "x-admin-token: $WEBHOOK_SECRET" https://trade.example.com/admin/journal
 
 | Action | Command |
 |---|---|
-| **Stop all trading now** | `curl -X POST -H "x-admin-token: $WEBHOOK_SECRET" "https://trade.example.com/admin/kill?on=true"` |
+| **Stop all trading now** | `ssh ubuntu@trade.mdtrade.app 'cd /opt/gateway && . ./.env && curl -s -X POST -H "x-admin-token: $WEBHOOK_SECRET" "localhost:8000/admin/kill?on=true"'` |
 | Resume | same command with `on=false` |
-| Health | `curl https://trade.example.com/health` |
-| Logs | `docker compose logs -f gateway` |
+| Health | `ssh ubuntu@trade.mdtrade.app 'curl -s localhost:8000/health'` |
+| Logs | `ssh ubuntu@trade.mdtrade.app 'cd /opt/gateway && docker compose logs -f gateway'` |
 
 Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to get a phone message for every order,
 reject, fill, and error.
