@@ -1,0 +1,9 @@
+{
+  "secret": "PASTE_YOUR_WEBHOOK_SECRET",
+  "strategy_id": "ema-cross",
+  "ticker": "{{ticker}}",
+  "action": "buy",
+  "price": "{{close}}",
+  "bar_time": "{{time}}",
+  "fired_at": "{{timenow}}"
+}

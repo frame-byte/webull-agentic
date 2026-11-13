@@ -1,0 +1,19 @@
+# Copy to config/strategies.yaml and edit. strategy_id must match "strategy_id" in the TradingView alert message.
+strategies:
+  ema-cross:
+    enabled: true
+    symbols: [AAPL, MSFT]
+    sizing: fixed_shares      # fixed_shares | fixed_dollars | mirror
+    shares: 1                 # start tiny; raise after the live trial
+    allow_short: false        # long-only: a "short" signal just flattens
+    extended_hours: false     # regular session only
+    max_shares: 10
+    max_notional: 2000
+
+  rsi-swing:
+    enabled: false            # turn on after it has been checked in dry run
+    symbols: [NVDA]
+    sizing: fixed_dollars
+    dollars: 1000
+    max_shares: 20
+    max_notional: 1500
