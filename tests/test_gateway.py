@@ -165,3 +165,17 @@ def test_reconcile_fill_and_timeout():
     ex.reconcile(time.time() + s.order_timeout_s + 1)
     by = {o["client_order_id"]: o["status"] for o in ex.store.recent_orders()}
     assert by == {"a": "filled", "b": "cancelled"}
+
+
+def test_webhook_tolerates_linebreak_in_secret(monkeypatch):
+    # Reproduces a real TradingView alert: the pasted secret carried a newline before its closing quote.
+    monkeypatch.setattr("app.executor.datetime", type("D", (), {"now": staticmethod(lambda tz=None: NOW)}))
+    c, ex, b = client(enforce_ip_allowlist=False)
+    body = ('{\n  "secret": "' + SECRET + '\n",\n  "strategy_id": "ema",\n  "ticker": "AAPL",\n'
+            '  "action": "buy",\n  "market_position": "long",\n  "price": "200",\n'
+            f'  "bar_time": "2026-11-11T15:00:00Z",\n  "fired_at": "{NOW.isoformat()}",\n  "order_id": "Long"\n}}\n')
+    r = c.post("/webhook", content=body, headers={"content-type": "text/plain; charset=utf-8"})
+    assert r.status_code == 200 and r.json()["status"] == "accepted"
+    # Truly malformed JSON still gets a 400 with the reason.
+    r = c.post("/webhook", content='{"secret": "x",}')
+    assert r.status_code == 400 and "JSON" in r.json()["detail"]

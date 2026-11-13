@@ -90,19 +90,26 @@ def create_app(settings: Optional[Settings] = None, executor: Optional[Executor]
         if len(raw) > 8192:
             raise HTTPException(413, "payload too large")
         try:
-            payload = json.loads(raw)  # TradingView may send text/plain even for JSON bodies
+            # TradingView may send text/plain even for JSON bodies. strict=False tolerates raw
+            # line breaks inside strings (a common paste error in the alert message box).
+            payload = json.loads(raw, strict=False)
             if not isinstance(payload, dict):
-                raise ValueError("not an object")
-        except ValueError:
-            raise HTTPException(400, "body must be a JSON object")
+                raise ValueError("not a JSON object")
+        except ValueError as e:
+            log.warning("400 from %s: body is not a JSON object (%s; %d bytes)", ip, e, len(raw))
+            raise HTTPException(400, f"body must be a JSON object: {e}")
 
+        # Strip whitespace from string values (trailing newlines/spaces from pasting).
+        payload = {k: v.strip() if isinstance(v, str) else v for k, v in payload.items()}
         if not hmac.compare_digest(str(payload.get("secret", "")), settings.webhook_secret):
-            log.warning("bad secret from %s", ip)
+            log.warning("401 from %s: bad secret", ip)
             raise HTTPException(401, "unauthorized")
         try:
             sig = Signal.model_validate(payload)
         except ValidationError as e:
-            raise HTTPException(422, f"invalid signal: {e.errors(include_url=False)}")
+            errs = e.errors(include_url=False, include_input=False)
+            log.warning("422 from %s: invalid signal %s", ip, errs)
+            raise HTTPException(422, f"invalid signal: {errs}")
 
         signal_id = ex.store.insert_signal(sig.idempotency_key(), sig.strategy_id, sig.ticker, payload)
         if signal_id is None:
