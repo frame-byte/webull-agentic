@@ -6,8 +6,18 @@ package_update: true
 package_upgrade: true
 packages: [docker.io, docker-compose-v2, git, ufw, fail2ban, unattended-upgrades, openssl]
 
+# The ubuntu user is created explicitly with the key below, instead of relying on
+# DigitalOcean's metadata key injection. provision.py fills __SSH_PUBKEY__ from the
+# DigitalOcean SSH key named by --ssh-key-name. ('docker' group is added in runcmd,
+# because it doesn't exist until the docker.io package is installed.)
 users:
-  - default          # 'ubuntu' — receives your DigitalOcean SSH key
+  - name: ubuntu
+    groups: [sudo, adm]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
 
 ssh_pwauth: false
 disable_root: true

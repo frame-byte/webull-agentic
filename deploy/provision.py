@@ -40,7 +40,7 @@ def main() -> None:
     ap.add_argument("--hostname", default="trade.mdtrade.app")
     ap.add_argument("--zone", default="mdtrade.app")
     ap.add_argument("--name", default="webull-gateway")
-    ap.add_argument("--region", default="nyc3")
+    ap.add_argument("--region", default="nyc1")  # s-1vcpu-1gb unavailable in nyc3 (Nov 2026)
     ap.add_argument("--size", default="s-1vcpu-1gb")
     ap.add_argument("--image", default="ubuntu-24-04-x64")
     ap.add_argument("--repo", default="frame-byte/webull-agentic")
@@ -63,7 +63,8 @@ def main() -> None:
     zone_id = zones[0]["id"]
 
     user_data = ((HERE / "cloud-init.yaml").read_text()
-                 .replace("__BRANCH__", a.branch).replace("__REPO__", a.repo).replace("__DOMAIN__", a.hostname))
+                 .replace("__BRANCH__", a.branch).replace("__REPO__", a.repo).replace("__DOMAIN__", a.hostname)
+                 .replace("__SSH_PUBKEY__", key["public_key"].strip()))
     assert "__" not in user_data.replace("__init__", ""), "unfilled placeholder in cloud-init"
 
     existing = [d for d in call("GET", f"{DO}/droplets?per_page=200", do_t)["droplets"] if d["name"] == a.name]

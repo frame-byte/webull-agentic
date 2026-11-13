@@ -53,7 +53,7 @@ python -m scripts.check_webull AAPL
 ## Step 4: Deploy (DigitalOcean + Cloudflare)
 
 `deploy/provision.py` creates, through the APIs:
-- an Ubuntu 24.04 droplet (`s-1vcpu-1gb`, nyc3) booted by [`deploy/cloud-init.yaml`](deploy/cloud-init.yaml)
+- an Ubuntu 24.04 droplet (`s-1vcpu-1gb`, nyc1) booted by [`deploy/cloud-init.yaml`](deploy/cloud-init.yaml)
   (Docker, ufw, fail2ban, unattended upgrades, the repo, the gateway in **dryrun**)
 - a cloud firewall: SSH 22, HTTP 80 (needed for the certificate), and **443 only from TradingView's IPs**
 - a **DNS-only** (grey cloud) Cloudflare A record `trade.mdtrade.app`
