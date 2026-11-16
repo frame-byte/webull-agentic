@@ -179,3 +179,22 @@ def test_webhook_tolerates_linebreak_in_secret(monkeypatch):
     # Truly malformed JSON still gets a 400 with the reason.
     r = c.post("/webhook", content='{"secret": "x",}')
     assert r.status_code == 400 and "JSON" in r.json()["detail"]
+
+
+def test_dryrun_equity_does_not_trip_live_loss_limit():
+    s, ex, b = make()
+    run(ex, sig(order_id="1"))                 # dry run records simulated 100k for today
+    b.name, b.equity = "webull_openapi", 2_438  # same day, now "live" with real equity
+    d = run(ex, sig(market_position="flat", order_id="2"))
+    assert d.accepted and not ex.killed()
+
+
+def test_filled_order_that_cannot_be_cancelled_does_not_block():
+    from app.brokers.base import OrderResult
+    s, ex, b = make()
+    ex.store.insert_order("old", 1, "AAPL", "BUY", 1, 200, "submitted", {})  # filled at broker, stale here
+    b.cancel_order = lambda coid: OrderResult(False, coid, "unknown", error="order already filled")
+    b.get_order_status = lambda coid: OrderResult(True, coid, "filled")
+    d = run(ex, sig())
+    assert d.accepted and d.side == "BUY"
+    assert {o["client_order_id"]: o["status"] for o in ex.store.recent_orders()}["old"] == "filled"

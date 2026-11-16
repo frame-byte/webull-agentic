@@ -139,6 +139,8 @@ class WebullOpenApiBroker:
         except Exception as e:
             return OrderResult(ok=False, client_order_id=client_order_id, status="unknown", error=str(e))
         raw_status = str(_find(body, ("status", "order_status")) or "").upper()
+        if raw_status not in _STATUS_MAP:
+            log.warning("unrecognised Webull order status %r for %s: %s", raw_status, client_order_id, body)
         return OrderResult(ok=True, client_order_id=client_order_id,
                            status=_STATUS_MAP.get(raw_status, "unknown"), raw=body)
 

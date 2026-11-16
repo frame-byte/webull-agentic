@@ -82,7 +82,8 @@ class Executor:
 
         # Daily loss limit (equity vs first reading of the day).
         equity = self.broker.get_equity()
-        day_key = f"start_equity:{risk.today_et(now)}"
+        # Keyed by broker so a dry-run day (simulated equity) never feeds the live loss limit.
+        day_key = f"start_equity:{self.broker.name}:{risk.today_et(now)}"
         start_eq = self.store.get(day_key)
         if start_eq is None and equity is not None:
             self.store.set(day_key, str(equity))
@@ -94,9 +95,17 @@ class Executor:
         # A newer signal supersedes any working order for this symbol.
         if prev := self.store.open_order_for(sig.ticker):
             res = self.broker.cancel_order(prev["client_order_id"])
-            self.store.update_order(prev["client_order_id"], "cancelled" if res.ok else prev["status"], res.raw)
-            if not res.ok:
-                return self._reject(f"could not cancel working order {prev['client_order_id']}: {res.error}")
+            if res.ok:
+                self.store.update_order(prev["client_order_id"], "cancelled", res.raw)
+            else:
+                # Cancel fails when the order already finished (e.g. filled). Ask the broker before
+                # giving up, so one stale row can't block every later signal for this symbol.
+                st = self.broker.get_order_status(prev["client_order_id"])
+                if st.ok and st.status in ("filled", "cancelled", "rejected"):
+                    self.store.update_order(prev["client_order_id"], st.status, st.raw)
+                else:
+                    return self._reject(f"could not cancel working order {prev['client_order_id']}: "
+                                        f"{res.error} (broker status: {st.status})")
 
         current = self.broker.get_position_qty(sig.ticker)
         target, notes = risk.target_quantity(direction, strat, quote.last, sig.position_size)
