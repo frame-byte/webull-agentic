@@ -64,8 +64,6 @@ class Executor:
             return self._reject(f"unknown strategy {sig.strategy_id!r}")
         if sig.ticker not in strat.symbols:
             return self._reject(f"{sig.ticker} not allowed for {sig.strategy_id}")
-        if self.killed():
-            return self._reject("kill switch is on")
         if not strat.enabled:
             return self._reject("strategy disabled")
         if r := risk.check_session(now, strat):
@@ -89,8 +87,8 @@ class Executor:
             self.store.set(day_key, str(equity))
             start_eq = str(equity)
         if r := risk.check_daily_loss(float(start_eq) if start_eq else None, equity, s.max_daily_loss_pct):
-            self.set_kill(True, r)
-            return self._reject(r)
+            if not self.killed():
+                self.set_kill(True, r)
 
         # A newer signal supersedes any working order for this symbol.
         if prev := self.store.open_order_for(sig.ticker):
@@ -108,7 +106,11 @@ class Executor:
                                         f"{res.error} (broker status: {st.status})")
 
         current = self.broker.get_position_qty(sig.ticker)
-        target, notes = risk.target_quantity(direction, strat, quote.last, sig.position_size)
+        target, notes = risk.target_quantity(direction, strat, quote.last, sig.position_size, equity)
+        if strat.sizing == "percent_equity" and current != 0 and (current > 0) == (target > 0) and target != 0:
+            # Already positioned this way: don't churn small resize orders as equity/price drift.
+            notes.append("already positioned; percent sizing does not resize")
+            target = current
         delta = target - current
         base = dict(target_qty=target, current_qty=current, delta_qty=delta, meta={"notes": notes})
 
@@ -121,8 +123,15 @@ class Executor:
                 base.update(target_qty=0.0, delta_qty=delta)
                 notes.append("crossing zero: flatten first")
 
-        if self.store.orders_since(risk.start_of_day_ts(now)) >= s.max_orders_per_day:
-            return self._reject(f"max_orders_per_day {s.max_orders_per_day} reached", **base)
+        # Kill switch, daily loss and order-count limits block new exposure but never an exit,
+        # so a tripped limit can't trap you in a losing position.
+        if abs(target) >= abs(current):
+            if self.killed():
+                return self._reject("kill switch is on (exits still allowed)", **base)
+            if self.store.orders_since(risk.start_of_day_ts(now)) >= s.max_orders_per_day:
+                return self._reject(f"max_orders_per_day {s.max_orders_per_day} reached", **base)
+        else:
+            notes.append("reducing position: allowed past kill switch / order limits")
 
         side = "BUY" if delta > 0 else "SELL"
         qty = abs(delta)

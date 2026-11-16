@@ -101,24 +101,51 @@ def test_rejections(kw, reason):
     assert not d.accepted and reason in d.reason and not b.orders
 
 
-def test_kill_switch_and_daily_loss():
-    s, ex, b = make()
+def test_kill_switch_blocks_entries_but_allows_exits():
+    s, ex, b = make(shares=2)
+    run(ex, sig(order_id="1"))                 # long 2
     ex.set_kill(True)
-    assert "kill" in run(ex, sig()).reason
-    ex.set_kill(False)
-    run(ex, sig())                             # records start equity 100k
+    d = run(ex, sig(market_position="flat", order_id="2"))
+    assert d.accepted and d.side == "SELL" and b.positions["AAPL"] == 0
+    d = run(ex, sig(order_id="3"))
+    assert not d.accepted and "kill switch" in d.reason and b.positions["AAPL"] == 0
+
+
+def test_daily_loss_trips_kill_but_lets_position_close():
+    s, ex, b = make(shares=2)
+    run(ex, sig(order_id="1"))                 # records start equity 100k, long 2
     b.equity = 96_000                          # -4% > 3% limit
     d = run(ex, sig(market_position="flat", order_id="F"))
-    assert not d.accepted and "daily loss" in d.reason and ex.killed()
+    assert d.accepted and d.side == "SELL" and ex.killed()
+    d = run(ex, sig(order_id="L2"))
+    assert not d.accepted and "kill switch" in d.reason
 
 
-def test_max_orders_per_day():
+def test_max_orders_per_day_allows_exit():
     s, ex, b = make()
-    s.max_orders_per_day = 2
-    run(ex, sig(order_id="1"))
-    run(ex, sig(market_position="flat", order_id="2"))
+    s.max_orders_per_day = 1
+    run(ex, sig(order_id="1"))                 # 1st order: buy
+    d = run(ex, sig(market_position="flat", order_id="2"))
+    assert d.accepted and d.side == "SELL"     # exit allowed past the limit
     d = run(ex, sig(order_id="3"))
     assert not d.accepted and "max_orders_per_day" in d.reason
+
+
+def test_percent_equity_sizing():
+    st = StrategyConfig("x", ["A"], sizing="percent_equity", percent=100, max_shares=10_000, max_notional=1e9)
+    q, notes = risk.target_quantity("long", st, 55.85, 84014, equity=2438.01)
+    assert q == 43                             # floor(2438.01 / (55.85*1.01)) = 43, ~$2,401
+    assert q * 55.85 * 1.003 <= 2438.01        # fits in cash even at the +0.3% limit price
+    assert risk.target_quantity("long", st, 55.85, None, equity=None)[0] == 0
+    capped = StrategyConfig("x", ["A"], sizing="percent_equity", percent=100, max_shares=10_000, max_notional=1000)
+    assert risk.target_quantity("long", capped, 55.85, None, equity=2438.01)[0] == 17
+
+
+def test_percent_equity_in_executor_uses_broker_equity():
+    s, ex, b = make(sizing="percent_equity", percent=50, max_shares=10_000, max_notional=1e9)
+    b.equity = 10_000
+    d = run(ex, sig())                         # 50% of 10k at ~200 -> 24 shares
+    assert d.accepted and d.delta_qty == 24
 
 
 # ---------- HTTP ----------
@@ -198,3 +225,12 @@ def test_filled_order_that_cannot_be_cancelled_does_not_block():
     d = run(ex, sig())
     assert d.accepted and d.side == "BUY"
     assert {o["client_order_id"]: o["status"] for o in ex.store.recent_orders()}["old"] == "filled"
+
+
+def test_percent_equity_does_not_resize_existing_position():
+    s, ex, b = make(sizing="percent_equity", percent=100, max_shares=10_000, max_notional=1e9)
+    b.equity = 10_000
+    run(ex, sig(order_id="1"))
+    b.equity = 12_000                          # account grew; same-direction signal arrives
+    d = run(ex, sig(order_id="2"))
+    assert d.accepted and d.delta_qty == 0 and len(b.orders) == 1

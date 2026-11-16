@@ -21,10 +21,12 @@ class StrategyConfig:
     #   fixed_shares: long target = `shares`
     #   fixed_dollars: long target = floor(`dollars` / price)
     #   mirror: target = TradingView strategy.position_size * `multiplier`
-    sizing: Literal["fixed_shares", "fixed_dollars", "mirror"] = "fixed_shares"
+    #   percent_equity: long target = floor(`percent`% of account net liquidation / price)
+    sizing: Literal["fixed_shares", "fixed_dollars", "mirror", "percent_equity"] = "fixed_shares"
     shares: float = 1
     dollars: float = 0
     multiplier: float = 1.0
+    percent: float = 0              # for percent_equity; 1-100, never uses margin
     allow_short: bool = False
     extended_hours: bool = False
     max_shares: float = 100          # absolute position cap per symbol
@@ -111,5 +113,10 @@ def load_strategies(path: str) -> dict[str, StrategyConfig]:
     for sid, cfg in (raw.get("strategies") or {}).items():
         cfg = dict(cfg)
         cfg["symbols"] = [s.upper() for s in cfg.get("symbols", [])]
-        out[sid] = StrategyConfig(strategy_id=sid, **cfg)
+        st = StrategyConfig(strategy_id=sid, **cfg)
+        if st.sizing not in ("fixed_shares", "fixed_dollars", "mirror", "percent_equity"):
+            raise ValueError(f"{sid}: unknown sizing {st.sizing!r}")
+        if st.sizing == "percent_equity" and not 0 < st.percent <= 100:
+            raise ValueError(f"{sid}: percent_equity needs 0 < percent <= 100 (got {st.percent})")
+        out[sid] = st
     return out

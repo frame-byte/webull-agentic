@@ -3,7 +3,7 @@ strategies:
   ema-cross:
     enabled: true
     symbols: [AAPL, MSFT]
-    sizing: fixed_shares      # fixed_shares | fixed_dollars | mirror
+    sizing: fixed_shares      # fixed_shares | fixed_dollars | mirror | percent_equity
     shares: 1                 # start tiny; raise after the live trial
     allow_short: false        # long-only: a "short" signal just flattens
     extended_hours: false     # regular session only
@@ -17,3 +17,14 @@ strategies:
     dollars: 1000
     max_shares: 20
     max_notional: 1500
+
+  # Use (almost) the whole account: percent of net liquidation value, cash only (no margin).
+  # max_shares / max_notional still cap it, so raise them too.
+  all-in-example:
+    enabled: false
+    symbols: [SOXL]
+    sizing: percent_equity
+    percent: 95
+    extended_hours: true
+    max_shares: 1000
+    max_notional: 10000

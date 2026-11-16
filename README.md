@@ -163,13 +163,13 @@ docker compose run --rm gateway python -c "from app.config import Settings; s=Se
 | Rule | Setting |
 |---|---|
 | Strategy/symbol allowlist and per-strategy `enabled` | `strategies.yaml` |
-| Global kill switch | `/admin/kill` |
+| Global kill switch (blocks new buys; exits always allowed) | `/admin/kill` |
 | Regular hours only, unless `extended_hours: true` | per strategy |
 | Signal older than N seconds | `MAX_SIGNAL_AGE_S` (60) |
 | Signal price vs live quote deviation | `MAX_PRICE_DEVIATION_PCT` (1.5) |
 | Max shares and max $ per symbol | `max_shares`, `max_notional` |
-| Orders per day | `MAX_ORDERS_PER_DAY` (20) |
-| Daily equity drawdown trips the kill switch | `MAX_DAILY_LOSS_PCT` (3) |
+| Orders per day (exits always allowed) | `MAX_ORDERS_PER_DAY` (20) |
+| Daily equity drawdown trips the kill switch (exits still allowed) | `MAX_DAILY_LOSS_PCT` (3) |
 | Long-only unless `allow_short: true`; long→short goes flat first | per strategy |
 | Orders are marketable LIMIT, at most N% through bid/ask | `LIMIT_BAND_PCT` (0.3) |
 | Unfilled orders cancelled after N seconds | `ORDER_TIMEOUT_S` (120) |

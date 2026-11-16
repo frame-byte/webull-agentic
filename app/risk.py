@@ -51,7 +51,7 @@ def check_price(signal_price: Optional[float], live: float, max_dev_pct: float) 
 
 
 def target_quantity(direction: str, strat: StrategyConfig, price: float,
-                    tv_position_size: Optional[float]) -> tuple[float, list[str]]:
+                    tv_position_size: Optional[float], equity: Optional[float] = None) -> tuple[float, list[str]]:
     """Whole-share target position (signed) after sizing and caps. Returns (qty, notes)."""
     notes: list[str] = []
     if direction == "flat":
@@ -64,6 +64,15 @@ def target_quantity(direction: str, strat: StrategyConfig, price: float,
         qty = strat.shares
     elif strat.sizing == "fixed_dollars":
         qty = math.floor(strat.dollars / price) if price > 0 else 0
+    elif strat.sizing == "percent_equity":
+        # Share of account net liquidation value (cash, not margin buying power). Priced 1% above
+        # last so the marketable-limit band and small moves still fit inside the cash.
+        if not equity or price <= 0:
+            notes.append("no equity reading -> 0 shares")
+            qty = 0
+        else:
+            qty = math.floor(equity * strat.percent / 100 / (price * 1.01))
+            notes.append(f"{strat.percent:g}% of equity ${equity:,.2f}")
     else:  # mirror
         qty = abs(tv_position_size or 0) * strat.multiplier
     qty = float(math.floor(qty))
