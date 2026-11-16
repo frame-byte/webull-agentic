@@ -8,6 +8,19 @@ services:
       - ./config/strategies.yaml:/srv/config/strategies.yaml:ro
     ports: ["127.0.0.1:8000:8000"]   # local admin access over SSH only
     restart: unless-stopped
+  watchdog:
+    # Separate container so it can report when the gateway itself is down.
+    # Only the Telegram settings are passed in (not the Webull keys).
+    image: python:3.12-slim
+    command: ["python", "-u", "/watchdog.py"]
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      DOMAIN: ${DOMAIN:-gateway}
+      TZ: America/New_York
+    volumes:
+      - ./deploy/watchdog.py:/watchdog.py:ro
+    restart: unless-stopped
   caddy:
     image: caddy:2.8.4
     ports: ["80:80", "443:443"]

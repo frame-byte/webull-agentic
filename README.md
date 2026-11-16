@@ -137,6 +137,27 @@ ssh ubuntu@trade.mdtrade.app 'cd /opt/gateway && . ./.env && curl -s -H "x-admin
 Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to get a phone message for every order,
 reject, fill, and error.
 
+### Watchdog (Telegram alerts when the gateway is down)
+
+The `watchdog` container checks `/health` every 30 seconds and sends a Telegram message:
+- **DOWN** after 3 failed checks, then a reminder every 30 minutes while it stays down
+- **RECOVERED**, with how long it was down
+- when the kill switch turns on or off, or the mode changes
+- a **daily check** at 9:00 AM New York time on weekdays. If it doesn't arrive, the whole server is down.
+
+It runs separately from the gateway, so it still reports when the gateway crashes. It only
+receives the Telegram settings, not the Webull keys.
+
+```bash
+docker compose run --rm watchdog python /watchdog.py --test   # send a test message
+```
+
+Always check that the config loads before restarting after editing `strategies.yaml`:
+
+```bash
+docker compose run --rm gateway python -c "from app.config import Settings; s=Settings.from_env(); print(s.mode, list(s.strategies))"
+```
+
 ### Risk rules (any failure rejects the signal and notifies you)
 
 | Rule | Setting |
