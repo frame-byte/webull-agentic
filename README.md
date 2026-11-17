@@ -3,7 +3,7 @@
 When a TradingView alert fires, this gateway receives the webhook, runs it through risk
 checks, and places an order on your Webull account through the **Webull OpenAPI**. The
 order goes in directly, with no confirmation in the app.
-Design rationale: [docs/adr/0001](docs/adr/0001-tradingview-to-webull-auto-trading.md).
+Design rationale: [docs/adr/0001](docs/adr/0001-tradingview-to-webull-auto-trading.md). Everyday commands: [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 ```
 TradingView alert ──HTTPS POST──► /webhook ─► checks (IP, secret, schema, duplicate) ─► 200 OK
