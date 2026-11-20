@@ -23,6 +23,12 @@ def market_session(now: datetime) -> str:
     return "closed"
 
 
+def in_stop_window(now: datetime) -> bool:
+    """Weekdays 9:00-15:58 ET: when a DAY, regular-hours trailing stop is (re)placed."""
+    t = now.astimezone(ET)
+    return t.weekday() < 5 and time(9, 0) <= t.time() < time(15, 58)
+
+
 def check_session(now: datetime, strat: StrategyConfig) -> Optional[str]:
     s = market_session(now)
     if s == "core" or (s == "extended" and strat.extended_hours):

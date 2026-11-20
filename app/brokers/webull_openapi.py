@@ -133,6 +133,34 @@ class WebullOpenApiBroker:
             return OrderResult(ok=False, client_order_id=client_order_id, status="rejected", error=str(e))
         return OrderResult(ok=True, client_order_id=client_order_id, status="submitted", raw=body)
 
+    @staticmethod
+    def trailing_stop_order(client_order_id: str, symbol: str, qty: float, trail_pct: float) -> dict:
+        """Webull trailing stop (docs: trade-api/stock). PERCENTAGE step is a fraction: 0.08 = 8%.
+        TRAILING_STOP_LOSS only supports DAY time in force, so it is re-placed each trading day."""
+        return {
+            "client_order_id": client_order_id,
+            "combo_type": "NORMAL",
+            "symbol": symbol,
+            "instrument_type": "EQUITY",
+            "market": "US",
+            "order_type": "TRAILING_STOP_LOSS",
+            "trailing_type": "PERCENTAGE",
+            "trailing_stop_step": f"{trail_pct / 100:.4f}".rstrip("0").rstrip("."),
+            "quantity": f"{qty:g}",
+            "side": "SELL",
+            "time_in_force": "DAY",
+            "support_trading_session": "CORE",
+            "entrust_type": "QTY",
+        }
+
+    def place_trailing_stop(self, client_order_id, symbol, qty, trail_pct):
+        order = self.trailing_stop_order(client_order_id, symbol, qty, trail_pct)
+        try:
+            body = self._json(self.trade.order_v2.place_order(self.account_id, [order]))
+        except Exception as e:
+            return OrderResult(ok=False, client_order_id=client_order_id, status="rejected", error=str(e))
+        return OrderResult(ok=True, client_order_id=client_order_id, status="submitted", raw=body)
+
     def get_order_status(self, client_order_id):
         try:
             body = self._json(self.trade.order_v2.get_order_detail(self.account_id, client_order_id))

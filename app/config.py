@@ -27,6 +27,7 @@ class StrategyConfig:
     dollars: float = 0
     multiplier: float = 1.0
     percent: float = 0              # for percent_equity; 1-100, never uses margin
+    trailing_stop_pct: float = 0    # >0: broker-side trailing stop this % below the high (long only)
     allow_short: bool = False
     extended_hours: bool = False
     max_shares: float = 100          # absolute position cap per symbol
@@ -118,5 +119,7 @@ def load_strategies(path: str) -> dict[str, StrategyConfig]:
             raise ValueError(f"{sid}: unknown sizing {st.sizing!r}")
         if st.sizing == "percent_equity" and not 0 < st.percent <= 100:
             raise ValueError(f"{sid}: percent_equity needs 0 < percent <= 100 (got {st.percent})")
+        if st.trailing_stop_pct and not 0.5 <= st.trailing_stop_pct <= 50:
+            raise ValueError(f"{sid}: trailing_stop_pct must be between 0.5 and 50 (got {st.trailing_stop_pct})")
         out[sid] = st
     return out

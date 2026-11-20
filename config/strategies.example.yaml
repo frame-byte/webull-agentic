@@ -9,6 +9,7 @@ strategies:
     extended_hours: false     # regular session only
     max_shares: 10
     max_notional: 2000
+    trailing_stop_pct: 0      # >0: Webull trailing stop this % below the high, re-placed each trading day
 
   rsi-swing:
     enabled: false            # turn on after it has been checked in dry run
@@ -25,6 +26,7 @@ strategies:
     symbols: [SOXL]
     sizing: percent_equity
     percent: 95
+    trailing_stop_pct: 8      # sell if price falls 8% from its high (regular hours)
     extended_hours: true
     max_shares: 1000
     max_notional: 10000

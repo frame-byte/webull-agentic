@@ -173,6 +173,7 @@ docker compose run --rm gateway python -c "from app.config import Settings; s=Se
 | Long-only unless `allow_short: true`; long→short goes flat first | per strategy |
 | Orders are marketable LIMIT, at most N% through bid/ask | `LIMIT_BAND_PCT` (0.3) |
 | Unfilled orders cancelled after N seconds | `ORDER_TIMEOUT_S` (120) |
+| Broker-side **trailing stop** on long positions, re-placed each weekday from 9:00 ET (Webull trailing stops are DAY-only and trigger in regular hours) | `trailing_stop_pct` per strategy |
 
 ### Known limits
 

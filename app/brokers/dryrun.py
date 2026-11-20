@@ -19,6 +19,7 @@ class DryRunBroker:
         self.positions: dict[str, float] = {}
         self.equity = equity
         self.orders: list[dict] = []
+        self.stops: dict[str, dict] = {}   # client_order_id -> {symbol, qty, trail_pct, status}
 
     def get_quote(self, symbol: str) -> Quote:
         if self._quote_source is not None:
@@ -39,8 +40,27 @@ class DryRunBroker:
         self.orders.append(o)
         return OrderResult(ok=True, client_order_id=client_order_id, status="dryrun", raw=o)
 
+    def place_trailing_stop(self, client_order_id, symbol, qty, trail_pct):
+        self.stops[client_order_id] = dict(symbol=symbol, qty=qty, trail_pct=trail_pct, status="submitted")
+        return OrderResult(ok=True, client_order_id=client_order_id, status="submitted",
+                           raw=self.stops[client_order_id])
+
+    def trigger_stop(self, client_order_id):
+        """Test/dry-run helper: simulate the stop being hit."""
+        st = self.stops[client_order_id]
+        st["status"] = "filled"
+        self.positions[st["symbol"]] = self.positions.get(st["symbol"], 0.0) - st["qty"]
+
     def get_order_status(self, client_order_id):
+        if client_order_id in self.stops:
+            return OrderResult(ok=True, client_order_id=client_order_id, status=self.stops[client_order_id]["status"])
         return OrderResult(ok=True, client_order_id=client_order_id, status="dryrun")
 
     def cancel_order(self, client_order_id):
+        st = self.stops.get(client_order_id)
+        if st is not None and st["status"] != "submitted":
+            return OrderResult(ok=False, client_order_id=client_order_id, status="unknown",
+                               error=f"order already {st['status']}")
+        if st is not None:
+            st["status"] = "cancelled"
         return OrderResult(ok=True, client_order_id=client_order_id, status="cancelled")

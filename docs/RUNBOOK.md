@@ -104,6 +104,18 @@ the "parsed by gateway" lines at the end.
 cd /opt/gateway && docker compose exec gateway python -m scripts.check_webull SOXL
 ```
 
+**Preview a trailing stop.** Webull validates the order without placing it. HTTP 200 means the format is accepted.
+
+```bash
+cd /opt/gateway && docker compose exec gateway python -m scripts.check_webull SOXL --preview-stop 8
+```
+
+**Open orders, including today's trailing stop:**
+
+```bash
+cd /opt/gateway && . ./.env && curl -s -H "x-admin-token: $WEBHOOK_SECRET" "localhost:8000/admin/journal?limit=20" | python3 -c "import sys,json;[print(o['kind'],o['symbol'],o['side'],o['qty'],o['status']) for o in json.load(sys.stdin)['orders'] if o['status'] in ('submitted','partial')]"
+```
+
 ---
 
 ## 6. Change settings
@@ -139,6 +151,7 @@ strategies:
     symbols: [SOXL]
     sizing: percent_equity
     percent: 95
+    trailing_stop_pct: 8
     extended_hours: true
     max_shares: 1000
     max_notional: 10000
@@ -147,6 +160,16 @@ EOF
 
 Sizing options: `fixed_shares` with `shares: N`, `fixed_dollars` with `dollars: N`, or
 `percent_equity` with `percent: 1–100`. `percent_equity` uses cash only, never margin.
+
+**Trailing stop:** `trailing_stop_pct: 8` keeps a Webull trailing stop on any long position:
+it sells if the price falls 8% below its high since the stop was placed. Set it to `0` to turn it off.
+- Placed automatically within 30 seconds of a buy filling, and **again every weekday from
+  9:00 AM New York time**, because Webull trailing stops only last one day.
+- It only triggers **9:30 AM–4:00 PM New York time**. Pre-market, after-hours and overnight moves aren't covered.
+- The high resets each morning, since the stop is new each day.
+- Before a strategy signal trades, the gateway cancels the stop, so the same shares can't be sold twice.
+- After a stop-out, the bot stays out until the strategy's next **buy** signal. TradingView's
+  chart still shows the position, because TradingView doesn't know the stop sold it.
 
 ### Risk limits (`.env`)
 
@@ -269,7 +292,7 @@ cd /opt/gateway && docker compose run --rm gateway python -c "from app.config im
 | `signal is stale` | Arrived more than `MAX_SIGNAL_AGE_S` after it fired |
 | `deviates …% from live` | The alert price is too far from Webull's live price |
 | `kill switch is on` | See section 3 |
-| `already at target` | Nothing to do: the position already matches the signal |
+| `already at target` | Nothing to do: the position already matches the signal (e.g. the trailing stop already sold) |
 
 ### HTTPS certificate
 

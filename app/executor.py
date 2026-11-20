@@ -90,20 +90,12 @@ class Executor:
             if not self.killed():
                 self.set_kill(True, r)
 
-        # A newer signal supersedes any working order for this symbol.
-        if prev := self.store.open_order_for(sig.ticker):
-            res = self.broker.cancel_order(prev["client_order_id"])
-            if res.ok:
-                self.store.update_order(prev["client_order_id"], "cancelled", res.raw)
-            else:
-                # Cancel fails when the order already finished (e.g. filled). Ask the broker before
-                # giving up, so one stale row can't block every later signal for this symbol.
-                st = self.broker.get_order_status(prev["client_order_id"])
-                if st.ok and st.status in ("filled", "cancelled", "rejected"):
-                    self.store.update_order(prev["client_order_id"], st.status, st.raw)
-                else:
-                    return self._reject(f"could not cancel working order {prev['client_order_id']}: "
-                                        f"{res.error} (broker status: {st.status})")
+        # A newer signal supersedes any working order for this symbol, including the protective
+        # trailing stop: it must be gone before we read the position and place the new order,
+        # or the stop and the strategy's exit could both sell the same shares.
+        for prev in self.store.open_orders(symbol=sig.ticker):
+            if err := self._cancel_or_settle(prev):
+                return self._reject(err)
 
         current = self.broker.get_position_qty(sig.ticker)
         target, notes = risk.target_quantity(direction, strat, quote.last, sig.position_size, equity)
@@ -149,19 +141,105 @@ class Executor:
         return Decision(accepted=True, reason="order placed", side=side, limit_price=limit,
                         **base | {"meta": {"notes": notes, "client_order_id": coid}})
 
+    def _cancel_or_settle(self, o: dict) -> Optional[str]:
+        """Cancel a working order. Returns an error string if it may still be working."""
+        res = self.broker.cancel_order(o["client_order_id"])
+        if res.ok:
+            self.store.update_order(o["client_order_id"], "cancelled", res.raw)
+            return None
+        # Cancel fails when the order already finished (e.g. filled). Ask the broker before
+        # giving up, so one stale row can't block every later signal for this symbol.
+        st = self.broker.get_order_status(o["client_order_id"])
+        if st.ok and st.status in ("filled", "cancelled", "rejected"):
+            self.store.update_order(o["client_order_id"], st.status, st.raw)
+            if o.get("kind") == "trailing_stop" and st.status == "filled":
+                self.notifier.send(f"🛑 Trailing stop SOLD {o['qty']:g} {o['symbol']}")
+            return None
+        return (f"could not cancel working order {o['client_order_id']}: "
+                f"{res.error} (broker status: {st.status})")
+
     # -- reconciliation (called periodically) --
     def reconcile(self, now_ts: float) -> None:
+        today = risk.today_et(datetime.fromtimestamp(now_ts, timezone.utc))
         for o in self.store.open_orders():
+            is_stop = o.get("kind") == "trailing_stop"
             res = self.broker.get_order_status(o["client_order_id"])
             if res.ok and res.status not in ("unknown", o["status"]):
                 self.store.update_order(o["client_order_id"], res.status, res.raw)
-                if res.status in ("filled", "rejected", "cancelled"):
+                if is_stop and res.status == "filled":
+                    self.notifier.send(f"🛑 Trailing stop SOLD {o['qty']:g} {o['symbol']}")
+                elif is_stop and res.status == "rejected":
+                    self.notifier.send(f"⚠️ Trailing stop on {o['symbol']} was rejected by Webull")
+                elif not is_stop and res.status in ("filled", "rejected", "cancelled"):
                     self.notifier.send(f"Order {o['side']} {o['qty']:g} {o['symbol']} -> {res.status.upper()}")
                 if res.status != "partial":
                     continue
+            if is_stop:
+                # DAY-only orders: anything from an earlier trading day has expired at the broker.
+                created_day = risk.today_et(datetime.fromtimestamp(o["created_at"], timezone.utc))
+                if created_day != today:
+                    self.store.update_order(o["client_order_id"], "cancelled", {"expired": created_day})
+                continue  # stops are never timed out like entry orders
             if now_ts - o["created_at"] > self.s.order_timeout_s:
                 c = self.broker.cancel_order(o["client_order_id"])
                 if c.ok:
                     self.store.update_order(o["client_order_id"], "cancelled", c.raw)
                     self.notifier.send(f"Cancelled stale order {o['side']} {o['qty']:g} {o['symbol']} "
                                        f"after {self.s.order_timeout_s}s unfilled")
+        self.ensure_trailing_stops(now_ts)
+
+    def ensure_trailing_stops(self, now_ts: float) -> None:
+        """Keep one broker-side trailing stop on every long position of a symbol whose strategy
+        sets trailing_stop_pct. Webull trailing stops are DAY-only and trigger in regular hours,
+        so they are (re)placed each weekday from 9:00 ET until shortly before the close."""
+        now = datetime.fromtimestamp(now_ts, timezone.utc)
+        if not risk.in_stop_window(now):
+            return
+        today = risk.today_et(now)
+        seen: set[str] = set()
+        for strat in self.s.strategies.values():
+            if strat.trailing_stop_pct <= 0:
+                continue
+            for symbol in strat.symbols:
+                if symbol in seen:
+                    continue
+                seen.add(symbol)
+                try:
+                    self._ensure_stop(symbol, strat.trailing_stop_pct, now_ts, today)
+                except Exception as e:
+                    log.exception("trailing stop upkeep failed for %s", symbol)
+                    self._stop_problem(symbol, today, now_ts, str(e))
+
+    def _ensure_stop(self, symbol: str, pct: float, now_ts: float, today: str) -> None:
+        if float(self.store.get(f"stop_backoff:{symbol}", "0")) > now_ts:
+            return
+        with self._locks[symbol]:
+            if self.store.open_orders(kind="entry", symbol=symbol):
+                return  # an entry/exit order is still working; wait until it settles
+            qty = self.broker.get_position_qty(symbol)
+            stops = self.store.open_orders(kind="trailing_stop", symbol=symbol)
+            if qty <= 0:
+                for o in stops:  # position closed (e.g. sold by hand): drop the stop
+                    self._cancel_or_settle(o)
+                return
+            if len(stops) == 1 and stops[0]["qty"] == qty:
+                return  # already protected
+            for o in stops:  # wrong size (partial fill, manual trade): replace
+                if err := self._cancel_or_settle(o):
+                    self._stop_problem(symbol, today, now_ts, err)
+                    return
+            coid = uuid.uuid4().hex
+            res = self.broker.place_trailing_stop(coid, symbol, qty, pct)
+            self.store.insert_order(coid, None, symbol, "SELL", qty, None, res.status if res.ok else "rejected",
+                                    res.raw or res.error, kind="trailing_stop", created_at=now_ts)
+            if not res.ok:
+                self._stop_problem(symbol, today, now_ts, res.error)
+                return
+            self.store.set(f"stop_problem_notified:{symbol}", "")
+            self.notifier.send(f"🛡 Trailing stop {pct:g}% placed on {qty:g} {symbol} (valid today, regular hours)")
+
+    def _stop_problem(self, symbol: str, today: str, now_ts: float, err: str) -> None:
+        self.store.set(f"stop_backoff:{symbol}", str(now_ts + 300))  # retry in 5 minutes
+        if self.store.get(f"stop_problem_notified:{symbol}") != today:  # at most one alert a day
+            self.store.set(f"stop_problem_notified:{symbol}", today)
+            self.notifier.send(f"⚠️ Could not place trailing stop on {symbol} (retrying every 5 min): {err}")

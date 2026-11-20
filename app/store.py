@@ -41,6 +41,9 @@ class Store:
         with self._lock:
             self._conn.executescript(SCHEMA)
             self._conn.execute("PRAGMA journal_mode=WAL")
+            cols = [r[1] for r in self._conn.execute("PRAGMA table_info(orders)")]
+            if "kind" not in cols:  # migrate DBs created before trailing stops existed
+                self._conn.execute("ALTER TABLE orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'entry'")
 
     # -- signals --
     def insert_signal(self, idem_key: str, strategy_id: str, ticker: str, payload: dict) -> Optional[int]:
@@ -66,14 +69,17 @@ class Store:
         return [dict(r) for r in rows]
 
     # -- orders --
-    def insert_order(self, client_order_id: str, signal_id: int, symbol: str, side: str, qty: float,
-                     limit_price: float, status: str, broker_response: Any) -> None:
-        now = time.time()
+    def insert_order(self, client_order_id: str, signal_id: Optional[int], symbol: str, side: str, qty: float,
+                     limit_price: Optional[float], status: str, broker_response: Any, kind: str = "entry",
+                     created_at: Optional[float] = None) -> None:
+        """kind: 'entry' for signal orders (limit), 'trailing_stop' for protective stops."""
+        now = created_at if created_at is not None else time.time()
         with self._lock:
             self._conn.execute(
-                "INSERT INTO orders VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO orders(client_order_id, signal_id, created_at, symbol, side, qty, limit_price, "
+                "status, broker_response, updated_at, kind) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (client_order_id, signal_id, now, symbol, side, qty, limit_price, status,
-                 json.dumps(broker_response, default=str), now),
+                 json.dumps(broker_response, default=str), now, kind),
             )
 
     def update_order(self, client_order_id: str, status: str, broker_response: Any = None) -> None:
@@ -85,23 +91,22 @@ class Store:
                  time.time(), client_order_id),
             )
 
-    def open_orders(self) -> list[dict]:
+    def open_orders(self, kind: Optional[str] = None, symbol: Optional[str] = None) -> list[dict]:
+        q, args = "SELECT * FROM orders WHERE status IN ('submitted','partial')", []
+        if kind:
+            q += " AND kind=?"; args.append(kind)
+        if symbol:
+            q += " AND symbol=?"; args.append(symbol)
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM orders WHERE status IN ('submitted','partial') ORDER BY created_at").fetchall()
+            rows = self._conn.execute(q + " ORDER BY created_at", args).fetchall()
         return [dict(r) for r in rows]
 
-    def open_order_for(self, symbol: str) -> Optional[dict]:
-        with self._lock:
-            r = self._conn.execute(
-                "SELECT * FROM orders WHERE symbol=? AND status IN ('submitted','partial') "
-                "ORDER BY created_at DESC LIMIT 1", (symbol,)).fetchone()
-        return dict(r) if r else None
-
     def orders_since(self, ts: float) -> int:
+        """Entry orders placed since ts (protective stops don't count toward the daily limit)."""
         with self._lock:
             return self._conn.execute(
-                "SELECT COUNT(*) FROM orders WHERE created_at>=? AND status!='rejected'", (ts,)).fetchone()[0]
+                "SELECT COUNT(*) FROM orders WHERE created_at>=? AND status!='rejected' AND kind='entry'",
+                (ts,)).fetchone()[0]
 
     def recent_orders(self, limit: int = 50) -> list[dict]:
         with self._lock:
